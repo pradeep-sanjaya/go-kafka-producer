@@ -1,37 +1,58 @@
 package main
 
 import (
-	"context"
 	"log"
 	"time"
 
-	"github.com/segmentio/kafka-go"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
 func main() {
-	brokerAddress := "localhost:9092"
+	brokerAddress := "localhost:9092,localhost:9093,localhost:9094"
 	topic := "topic1"
 	numMessages := 10000
 	message := "Hello"
 
-	writer := kafka.NewWriter(kafka.WriterConfig{
-		Brokers:  []string{brokerAddress},
-		Topic:    topic,
-		Balancer: &kafka.LeastBytes{},
+	producer, err := kafka.NewProducer(&kafka.ConfigMap{
+		"bootstrap.servers": brokerAddress,
+		//"key.serializer":    "org.apache.kafka.common.serialization.StringSerializer",
+		//"value.serializer": "org.apache.kafka.common.serialization.StringSerializer",
+		"acks":       "0",
+		"batch.size": "100",
+		//"linger.ms":  "100",
 	})
 
-	defer writer.Close()
+	if err != nil {
+		panic(err)
+	}
+
+	defer producer.Close()
+
+	deliveryChan := make(chan kafka.Event)
 
 	startTime := time.Now()
 
 	for i := 0; i < numMessages; i++ {
-		err := writer.WriteMessages(context.Background(), kafka.Message{
-			Value: []byte(message),
-		})
+		err := producer.Produce(&kafka.Message{
+			TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
+			Value:          []byte(message),
+		}, deliveryChan)
 
 		if err != nil {
-			log.Printf("send failed, %s", err)
-			panic(err)
+			return
+		}
+
+		e := <-deliveryChan
+		m := e.(*kafka.Message)
+
+		if m.TopicPartition.Error != nil {
+			log.Printf("Delivery failed: %v\n", m.TopicPartition.Error)
+		} else {
+			log.Printf(
+				"Delivered message to topic %s [%d] at offset %v\n",
+				*m.TopicPartition.Topic,
+				m.TopicPartition.Partition,
+				m.TopicPartition.Offset)
 		}
 
 		log.Printf("sent message %d\n", i+1)
